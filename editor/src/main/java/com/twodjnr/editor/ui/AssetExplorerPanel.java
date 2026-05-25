@@ -1,26 +1,31 @@
 package com.twodjnr.editor.ui;
 
 import com.twodjnr.editor.EditorSession;
+import com.twodjnr.editor.log.LogBus;
+import com.twodjnr.editor.signal.EditorSignals;
+import com.twodjnr.engine.signal.SignalBus;
 import com.twodjnr.engine.core.IsolatedNode;
+import com.twodjnr.engine.signal.SubscribeSignal;
 
 import javax.swing.*;
 import javax.swing.tree.*;
 import java.awt.*;
 import java.io.File;
+import java.nio.file.*;
 import java.util.Arrays;
 
 public class AssetExplorerPanel extends JPanel {
     private final EditorSession session;
-    private final EditorFrame editorFrame;
     private final JTree tree;
     private final DefaultTreeModel treeModel;
     private final DefaultMutableTreeNode rootNode;
     private final DefaultMutableTreeNode prefabsNode;
     private final DefaultMutableTreeNode assetsNode;
+    private final JLabel statusBar = new JLabel(" ");
+    private int fileCount;
 
-    public AssetExplorerPanel(EditorSession session, EditorFrame editorFrame) {
+    public AssetExplorerPanel(EditorSession session) {
         this.session = session;
-        this.editorFrame = editorFrame;
         setLayout(new BorderLayout());
         setPreferredSize(new Dimension(400, 160));
         setBorder(BorderFactory.createTitledBorder("Asset Explorer"));
@@ -46,23 +51,101 @@ public class AssetExplorerPanel extends JPanel {
                         DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
                         Object userObj = node.getUserObject();
                         if (userObj instanceof NodeData nd && node.getParent() == prefabsNode) {
-                            editorFrame.openPrefabTab((String) nd.data);
+                            LogBus.log("AssetExplorerPanel", "PREFAB_OPEN", (String) nd.data,
+                                    () -> SignalBus.emit(EditorSignals.PREFAB_OPEN, nd.data));
                         }
                     }
                 }
             }
         });
 
+        SignalBus.register(this);
+
         JScrollPane scroll = new JScrollPane(tree);
         add(scroll, BorderLayout.CENTER);
 
-        JPanel bottom = new JPanel(new FlowLayout(FlowLayout.CENTER, 0, 0));
+        JPanel bottom = new JPanel(new FlowLayout(FlowLayout.CENTER, 5, 0));
+        JButton importBtn = new JButton("Import Asset");
+        importBtn.addActionListener(e -> doImportAsset());
+        bottom.add(importBtn);
         JButton refreshBtn = new JButton("Refresh");
-        refreshBtn.addActionListener(e -> refresh());
+        refreshBtn.addActionListener(e ->
+            LogBus.log("AssetExplorerPanel", "REFRESH_BTN", null, () -> refresh())
+        );
         bottom.add(refreshBtn);
         add(bottom, BorderLayout.SOUTH);
 
+        statusBar.setFont(new Font("Monospaced", Font.PLAIN, 10));
+        add(statusBar, BorderLayout.NORTH);
+
         refresh();
+    }
+
+    private void doImportAsset() {
+        File projectDir = session.getProjectDirectory();
+        if (projectDir == null) {
+            JOptionPane.showMessageDialog(this, "No project directory set. Save your project first.",
+                    "Error", JOptionPane.ERROR_MESSAGE);
+            LogBus.log("AssetExplorerPanel", "IMPORT", "failed: no project dir");
+            return;
+        }
+
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle("Import Asset");
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            LogBus.log("AssetExplorerPanel", "IMPORT", "cancelled at file picker");
+            return;
+        }
+
+        File selected = chooser.getSelectedFile();
+        if (selected == null) return;
+
+        String originalName = selected.getName();
+        String assetName = JOptionPane.showInputDialog(this, "Asset name:", originalName);
+        if (assetName == null) {
+            LogBus.log("AssetExplorerPanel", "IMPORT", "cancelled at name input");
+            return;
+        }
+        if (assetName.trim().isEmpty()) assetName = originalName;
+
+        // Path traversal protection
+        if (assetName.contains("/") || assetName.contains("\\") || assetName.contains("..")) {
+            JOptionPane.showMessageDialog(this,
+                    "Invalid asset name: cannot contain path separators or '..'",
+                    "Error", JOptionPane.ERROR_MESSAGE);
+            LogBus.log("AssetExplorerPanel", "IMPORT", "rejected path traversal: " + assetName);
+            return;
+        }
+
+        File assetsDir = new File(projectDir, "assets");
+        if (!assetsDir.exists() && !assetsDir.mkdirs()) {
+            JOptionPane.showMessageDialog(this, "Failed to create assets directory.",
+                    "Error", JOptionPane.ERROR_MESSAGE);
+            LogBus.log("AssetExplorerPanel", "IMPORT", "failed to create assets dir");
+            return;
+        }
+
+        File dest = new File(assetsDir, assetName);
+        if (dest.exists()) {
+            int overwrite = JOptionPane.showConfirmDialog(this,
+                    dest.getName() + " already exists. Overwrite?",
+                    "Confirm", JOptionPane.YES_NO_OPTION);
+            if (overwrite != JOptionPane.YES_OPTION) {
+                LogBus.log("AssetExplorerPanel", "IMPORT", "cancelled overwrite: " + dest.getAbsolutePath());
+                return;
+            }
+        }
+
+        try {
+            Files.copy(selected.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
+            LogBus.log("AssetExplorerPanel", "IMPORT",
+                    "source=" + selected.getAbsolutePath() + " dest=" + dest.getAbsolutePath(),
+                    () -> refresh());
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(this, "Failed to import: " + ex.getMessage(),
+                    "Error", JOptionPane.ERROR_MESSAGE);
+            LogBus.log("AssetExplorerPanel", "IMPORT", "error: " + ex.getMessage());
+        }
     }
 
     public void refresh() {
@@ -79,7 +162,16 @@ public class AssetExplorerPanel extends JPanel {
         assetsNode.removeAllChildren();
         File projectDir = session.getProjectDirectory();
         if (projectDir != null && projectDir.exists()) {
+            fileCount = 0;
+            LogBus.log("AssetExplorerPanel", "SCAN_START", projectDir.getAbsolutePath());
             scanDirectory(projectDir, assetsNode);
+            LogBus.log("AssetExplorerPanel", "SCAN_END", fileCount + " items found");
+            statusBar.setText(projectDir.getAbsolutePath() + " (" + fileCount + " items)");
+        } else if (projectDir != null && !projectDir.exists()) {
+            statusBar.setText("\u26A0 Directory does not exist: " + projectDir.getAbsolutePath());
+            LogBus.log("AssetExplorerPanel", "SCAN_DIR_MISSING", projectDir.getAbsolutePath());
+        } else {
+            statusBar.setText("\u26A0 No project directory set \u2014 save your project first");
         }
 
         treeModel.reload();
@@ -89,6 +181,8 @@ public class AssetExplorerPanel extends JPanel {
     private void scanDirectory(File dir, DefaultMutableTreeNode parent) {
         File[] files = dir.listFiles();
         if (files == null) return;
+
+        LogBus.log("AssetExplorerPanel", "SCAN_DIR", dir.getAbsolutePath());
 
         Arrays.sort(files, (a, b) -> {
             if (a.isDirectory() && !b.isDirectory()) return -1;
@@ -107,6 +201,10 @@ public class AssetExplorerPanel extends JPanel {
                 displayName = file.getName() + " [" + getFileType(file) + "]";
             }
 
+            fileCount++;
+            LogBus.log("AssetExplorerPanel", "SCAN_FILE",
+                    (file.isDirectory() ? "[DIR] " : "[FILE] ") + file.getAbsolutePath());
+
             DefaultMutableTreeNode child = new DefaultMutableTreeNode(new NodeData(displayName, file));
             parent.add(child);
 
@@ -114,6 +212,11 @@ public class AssetExplorerPanel extends JPanel {
                 scanDirectory(file, child);
             }
         }
+    }
+
+    @SubscribeSignal(signalName = "explorerRefresh")
+    public void onExplorerRefresh() {
+        refresh();
     }
 
     private static String getFileType(File file) {

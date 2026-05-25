@@ -1,12 +1,13 @@
 package com.twodjnr.editor.canvas;
 
 import com.twodjnr.editor.EditorSession;
+import com.twodjnr.editor.log.LogBus;
+import com.twodjnr.editor.project.TileSetSerializer;
 import com.twodjnr.engine.core.Node;
 import com.twodjnr.engine.core.Node2D;
 import com.twodjnr.engine.math.Vec2;
-import com.twodjnr.engine.nodes.Area2D;
-import com.twodjnr.engine.nodes.Body2D;
 import com.twodjnr.engine.nodes.TileMapNode;
+import com.twodjnr.engine.render.AssetManager;
 import com.twodjnr.engine.render.RenderServer;
 
 import org.lwjgl.opengl.GL;
@@ -15,6 +16,7 @@ import org.lwjgl.opengl.awt.GLData;
 
 import java.awt.*;
 import java.awt.event.*;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -26,6 +28,7 @@ public class LWJGLEditorViewport extends AWTGLCanvas implements Runnable, MouseL
 
     private final EditorSession session;
     private RenderServer renderServer;
+    private AssetManager assetManager;
     private Thread renderThread;
     private volatile boolean running;
     private Point dragStartScreen;
@@ -53,13 +56,35 @@ public class LWJGLEditorViewport extends AWTGLCanvas implements Runnable, MouseL
     public void initGL() {
         GL.createCapabilities();
         glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
-        renderServer = new RenderServer(getFramebufferWidth(), getFramebufferHeight(), null);
+        assetManager = new AssetManager();
+        renderServer = new RenderServer(getFramebufferWidth(), getFramebufferHeight(), assetManager);
     }
 
     @Override
     public void paintGL() {
         glClear(GL_COLOR_BUFFER_BIT);
         if (renderServer != null) {
+            File projectDir = session.getProjectDirectory();
+            if (projectDir != null) {
+                assetManager.setProjectRoot(projectDir);
+                // Ensure TileSet is loaded for TileMapNode
+                if (session.getSelectedNode() instanceof TileMapNode tmn && tmn.getTileSet() == null) {
+                    String tsp = tmn.getTileSetPath();
+                    if (tsp != null && !tsp.isEmpty()) {
+                        File tsFile = new File(tsp);
+                        if (!tsFile.isAbsolute() && projectDir != null) {
+                            tsFile = new File(projectDir, tsp);
+                        }
+                        if (tsFile.exists()) {
+                            try {
+                                tmn.setTileSet(TileSetSerializer.load(tsFile));
+                            } catch (Exception ex) {
+                                System.err.println("Failed to load tileset: " + ex.getMessage());
+                            }
+                        }
+                    }
+                }
+            }
             Node root = session.getCurrentRoot();
             if (root != null) {
                 Vec2 camPos = session.getViewportCameraPos();
@@ -112,22 +137,9 @@ public class LWJGLEditorViewport extends AWTGLCanvas implements Runnable, MouseL
         for (int i = candidates.size() - 1; i >= 0; i--) {
             Node2D n = candidates.get(i);
             Vec2 pos = n.getGlobalPosition();
-            Vec2 scale = n.getScale();
-            float w, h;
-            if (n instanceof Body2D b) {
-                w = b.getSize().x * scale.x;
-                h = b.getSize().y * scale.y;
-            } else if (n instanceof Area2D a) {
-                w = a.getSize().x * scale.x;
-                h = a.getSize().y * scale.y;
-            } else if (n instanceof TileMapNode t && t.getTileMap() != null) {
-                var tm = t.getTileMap();
-                w = tm.getWidth() * tm.getTileWidth() * scale.x;
-                h = tm.getHeight() * tm.getTileHeight() * scale.y;
-            } else {
-                w = 32 * scale.x;
-                h = 32 * scale.y;
-            }
+            Vec2 bounds = n.getBounds();
+            float w = bounds.x;
+            float h = bounds.y;
             if (worldPos.x >= pos.x && worldPos.x <= pos.x + w
                     && worldPos.y >= pos.y && worldPos.y <= pos.y + h) {
                 return n;
@@ -147,17 +159,57 @@ public class LWJGLEditorViewport extends AWTGLCanvas implements Runnable, MouseL
     public void mousePressed(MouseEvent e) {
         requestFocus();
         if (e.getButton() == MouseEvent.BUTTON2 || (e.getButton() == MouseEvent.BUTTON1 && e.isShiftDown())) {
-            panning = true;
-            dragStartScreen = e.getPoint();
-        } else if (e.getButton() == MouseEvent.BUTTON1) {
-            Vec2 worldPos = screenToWorld(e.getX(), e.getY());
+            Point sp = e.getPoint();
+            LogBus.log("LWJGLEditorViewport", "PAN_START", "screen=" + sp, () -> {
+                panning = true;
+                dragStartScreen = sp;
+            });
+            return;
+        }
+
+        Vec2 worldPos = screenToWorld(e.getX(), e.getY());
+        Node selected = session.getSelectedNode();
+
+        if (e.getButton() == MouseEvent.BUTTON1 && selected instanceof TileMapNode tmn
+                && session.getSelectedTileId() > 0) {
+            TileMapNode.CellCoord cell = tmn.worldToGrid(worldPos);
+            var tileMap = tmn.getTileMap();
+            if (cell.gx() >= 0 && cell.gx() < tileMap.getWidth()
+                    && cell.gy() >= 0 && cell.gy() < tileMap.getHeight()) {
+                int gx = cell.gx(), gy = cell.gy(), tid = session.getSelectedTileId();
+                LogBus.log("LWJGLEditorViewport", "TILE_PLACE",
+                        "gx=" + gx + " gy=" + gy + " tileId=" + tid,
+                        () -> tileMap.setTile(gx, gy, tid));
+                return;
+            }
+        }
+
+        if (e.getButton() == MouseEvent.BUTTON3 && selected instanceof TileMapNode tmn
+                && session.getSelectedTileId() > 0) {
+            TileMapNode.CellCoord cell = tmn.worldToGrid(worldPos);
+            var tileMap = tmn.getTileMap();
+            if (cell.gx() >= 0 && cell.gx() < tileMap.getWidth()
+                    && cell.gy() >= 0 && cell.gy() < tileMap.getHeight()) {
+                int gx = cell.gx(), gy = cell.gy();
+                LogBus.log("LWJGLEditorViewport", "TILE_ERASE", "gx=" + gx + " gy=" + gy,
+                        () -> tileMap.setTile(gx, gy, 0));
+                return;
+            }
+        }
+
+        if (e.getButton() == MouseEvent.BUTTON1) {
             Node2D picked = pickNodeAt(worldPos);
-            session.setSelectedNode(picked);
+            String desc = picked != null ? picked.getName() + " (" + picked.getClass().getSimpleName() + ")" : "none";
+            LogBus.log("LWJGLEditorViewport", "SELECT", desc,
+                    () -> session.setSelectedNode(picked));
         }
     }
 
     @Override
     public void mouseReleased(MouseEvent e) {
+        if (panning) {
+            LogBus.log("LWJGLEditorViewport", "PAN_END", null);
+        }
         panning = false;
     }
 
@@ -184,10 +236,13 @@ public class LWJGLEditorViewport extends AWTGLCanvas implements Runnable, MouseL
         float zoom = session.getViewportZoom();
         float newZoom = Math.max(0.25f, Math.min(4.0f, zoom - e.getWheelRotation() * 0.1f));
         Vec2 mouseBefore = screenToWorld(e.getX(), e.getY());
-        session.setViewportZoom(newZoom);
         Vec2 mouseAfter = screenToWorld(e.getX(), e.getY());
         Vec2 offset = mouseBefore.sub(mouseAfter);
         Vec2 cam = session.getViewportCameraPos();
-        session.setViewportCameraPos(cam.add(offset));
+        LogBus.log("LWJGLEditorViewport", "ZOOM", "zoom=" + String.format("%.2f", newZoom),
+                () -> {
+                    session.setViewportZoom(newZoom);
+                    session.setViewportCameraPos(cam.add(offset));
+                });
     }
 }

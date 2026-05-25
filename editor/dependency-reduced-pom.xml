@@ -30,4 +30,7 @@
       </plugin>
     </plugins>
   </build>
+  <properties>
+    <lwjgl.version>3.3.3</lwjgl.version>
+  </properties>
 </project>

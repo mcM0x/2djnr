@@ -1,6 +1,8 @@
 package com.twodjnr.editor.ui;
 
 import com.twodjnr.editor.EditorSession;
+import com.twodjnr.editor.signal.EditorSignals;
+import com.twodjnr.engine.signal.SignalBus;
 import com.twodjnr.engine.core.IsolatedNode;
 import com.twodjnr.engine.core.Node;
 

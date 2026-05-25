@@ -1,5 +1,6 @@
 package com.twodjnr.engine.core;
 
+import com.twodjnr.engine.signal.SignalBus;
 import java.lang.reflect.Field;
 import java.util.*;
 
@@ -11,8 +12,8 @@ public class Node {
     private final List<Node> children = new ArrayList<>();
     private SceneTree sceneTree;
     private boolean queuedForFree = false;
-    private final Map<String, Signal> signals = new HashMap<>();
     private final Set<String> groups = new HashSet<>();
+    private final Map<String, String> prefabReferences = new HashMap<>();
 
     // === Lifecycle hooks (override in scripts) ===
     public void onReady() {}
@@ -37,6 +38,7 @@ public class Node {
                 } catch (IllegalAccessException ignored) {}
             }
         }
+        copy.prefabReferences.putAll(this.prefabReferences);
         for (Node child : children) {
             copy.addChild(child.copy());
         }
@@ -130,12 +132,14 @@ public class Node {
         for (Node child : children) {
             child.propagateEnterTree(tree);
         }
+        SignalBus.register(this);
     }
 
     void propagateExitTree() {
         for (Node child : new ArrayList<>(children)) {
             child.propagateExitTree();
         }
+        SignalBus.disconnect(this);
         if (sceneTree != null) {
             for (String group : groups) {
                 sceneTree.unregisterNodeFromGroup(this, group);
@@ -187,6 +191,23 @@ public class Node {
         return groups;
     }
 
+    // === Prefab References ===
+    public String getPrefabReference(String fieldName) {
+        return prefabReferences.get(fieldName);
+    }
+
+    public void setPrefabReference(String fieldName, String isolatedNodeId) {
+        if (isolatedNodeId == null) {
+            prefabReferences.remove(fieldName);
+        } else {
+            prefabReferences.put(fieldName, isolatedNodeId);
+        }
+    }
+
+    public Map<String, String> getPrefabReferences() {
+        return prefabReferences;
+    }
+
     // === Deletion ===
     public void queueFree() {
         queuedForFree = true;
@@ -199,23 +220,4 @@ public class Node {
         return queuedForFree;
     }
 
-    // === Signals ===
-    public void connect(String signalName, Node target, String methodName) {
-        signals.computeIfAbsent(signalName, Signal::new).connect(target, methodName);
-    }
-
-    public void disconnect(String signalName, Node target, String methodName) {
-        Signal sig = signals.get(signalName);
-        if (sig != null) sig.disconnect(target, methodName);
-    }
-
-    public void emitSignal(String signalName, Object... args) {
-        Signal sig = signals.get(signalName);
-        if (sig != null) sig.emit(args);
-    }
-
-    // === Rendering (editor / AWT preview) ===
-    public void render(java.awt.Graphics2D g2d, float opacity) {
-        // Override in subclasses for editor preview
-    }
 }

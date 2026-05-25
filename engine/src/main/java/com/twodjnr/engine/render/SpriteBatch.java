@@ -2,6 +2,7 @@ package com.twodjnr.engine.render;
 
 import org.lwjgl.system.MemoryUtil;
 
+import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
 
 import static org.lwjgl.opengl.GL33.*;
@@ -20,6 +21,7 @@ public class SpriteBatch {
     private final int ebo;
     private final FloatBuffer vertexBuffer;
     private final Shader shader;
+    private final int whiteTexture;
     private int quadCount = 0;
     private int currentTexture = 0;
 
@@ -62,12 +64,23 @@ public class SpriteBatch {
         glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices, GL_STATIC_DRAW);
 
         glBindVertexArray(0);
+
+        whiteTexture = glGenTextures();
+        glBindTexture(GL_TEXTURE_2D, whiteTexture);
+        ByteBuffer whitePixel = ByteBuffer.allocateDirect(4);
+        whitePixel.put((byte) 0xff).put((byte) 0xff).put((byte) 0xff).put((byte) 0xff);
+        whitePixel.flip();
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, whitePixel);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glBindTexture(GL_TEXTURE_2D, 0);
     }
 
     public void begin() {
         quadCount = 0;
         vertexBuffer.clear();
         shader.use();
+        glBindTexture(GL_TEXTURE_2D, whiteTexture);
     }
 
     public void draw(float x, float y, float w, float h, float r, float g, float b, float a) {
@@ -113,6 +126,7 @@ public class SpriteBatch {
     }
 
     public void dispose() {
+        glDeleteTextures(whiteTexture);
         glDeleteBuffers(vbo);
         glDeleteBuffers(ebo);
         glDeleteVertexArrays(vao);

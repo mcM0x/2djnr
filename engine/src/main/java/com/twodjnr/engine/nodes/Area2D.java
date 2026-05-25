@@ -18,16 +18,7 @@ public class Area2D extends Node2D {
     public void setMonitoring(boolean monitoring) { this.monitoring = monitoring; }
 
     @Override
-    protected void drawLocal(java.awt.Graphics2D g2d, float opacity) {
-        java.awt.Color color = new java.awt.Color(255, 255, 0, Math.round(120 * opacity));
-        int w = Math.round(size.x);
-        int h = Math.round(size.y);
-        g2d.setColor(color);
-        g2d.fillRect(0, 0, w, h);
-        g2d.setColor(java.awt.Color.BLACK);
-        g2d.drawRect(0, 0, w, h);
-        String label = getName().isEmpty() ? getClass().getSimpleName() : getName();
-        g2d.setColor(java.awt.Color.WHITE);
-        g2d.drawString(label, 2, Math.max(12, h - 2));
+    public Vec2 getBounds() {
+        return size;
     }
 }

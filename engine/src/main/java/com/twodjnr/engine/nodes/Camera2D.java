@@ -2,6 +2,7 @@ package com.twodjnr.engine.nodes;
 
 import com.twodjnr.engine.core.Export;
 import com.twodjnr.engine.core.Node2D;
+import com.twodjnr.engine.math.Vec2;
 
 public class Camera2D extends Node2D {
     @Export(name = "Zoom")
@@ -23,15 +24,7 @@ public class Camera2D extends Node2D {
     public void setSmoothSpeed(float smoothSpeed) { this.smoothSpeed = smoothSpeed; }
 
     @Override
-    protected void drawLocal(java.awt.Graphics2D g2d, float opacity) {
-        int w = 64;
-        int h = 48;
-        g2d.setColor(new java.awt.Color(0, 200, 255, Math.round(180 * opacity)));
-        g2d.drawRect(0, 0, w, h);
-        g2d.drawLine(w / 2, 0, w / 2, h);
-        g2d.drawLine(0, h / 2, w, h / 2);
-        String label = getName().isEmpty() ? getClass().getSimpleName() : getName();
-        g2d.setColor(java.awt.Color.WHITE);
-        g2d.drawString(label, 2, h - 2);
+    public Vec2 getBounds() {
+        return new Vec2(64, 48);
     }
 }

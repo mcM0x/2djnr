@@ -61,6 +61,10 @@ public class IsolatedNodeBinaryWriter {
                 }
             } catch (IllegalAccessException ignored) {}
         }
+        for (Map.Entry<String, String> ref : node.getPrefabReferences().entrySet()) {
+            out.add(ref.getKey());
+            out.add(ref.getValue());
+        }
         for (Node child : node.getChildren()) {
             collectStrings(child, out);
         }
@@ -79,6 +83,14 @@ public class IsolatedNodeBinaryWriter {
         for (Field field : exportFields) {
             out.writeInt(indexOf(stringTable, field.getName()));
             writeFieldValue(out, node, field, stringTable);
+        }
+
+        // Prefab references
+        Map<String, String> refs = node.getPrefabReferences();
+        out.writeInt(refs.size());
+        for (Map.Entry<String, String> entry : refs.entrySet()) {
+            out.writeInt(indexOf(stringTable, entry.getKey()));
+            out.writeInt(indexOf(stringTable, entry.getValue()));
         }
 
         for (Node child : children) {

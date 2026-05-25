@@ -1,22 +1,30 @@
 package com.twodjnr.editor;
 
+import com.twodjnr.editor.log.LogBus;
 import com.twodjnr.editor.project.Project;
+import com.twodjnr.editor.signal.EditorSignals;
+import com.twodjnr.engine.signal.SignalBus;
 import com.twodjnr.engine.core.IsolatedNodeRegistry;
 import com.twodjnr.engine.core.Node;
 import com.twodjnr.engine.math.Vec2;
-import com.twodjnr.engine.nodes.Area2D;
-import com.twodjnr.engine.nodes.Body2D;
-import com.twodjnr.engine.nodes.TileMapNode;
+
 
 public class EditorSession {
     private Project project;
     private IsolatedNodeRegistry registry;
     private String activeIsolatedNodeId; // null = nothing open
     private Node selectedNode;
-    private final java.util.List<Runnable> selectionListeners = new java.util.ArrayList<>();
     private Vec2 viewportCameraPos = new Vec2(0, 0);
     private float viewportZoom = 1.0f;
     private java.io.File projectDirectory;
+    private int selectedTileId = 0;
+    private com.twodjnr.engine.level.TileSet activeTileSet;
+
+    public int getSelectedTileId() { return selectedTileId; }
+    public void setSelectedTileId(int selectedTileId) { this.selectedTileId = selectedTileId; }
+
+    public com.twodjnr.engine.level.TileSet getActiveTileSet() { return activeTileSet; }
+    public void setActiveTileSet(com.twodjnr.engine.level.TileSet activeTileSet) { this.activeTileSet = activeTileSet; }
 
     public Project getProject() { return project; }
     public void setProject(Project project) { this.project = project; }
@@ -28,7 +36,10 @@ public class EditorSession {
     public void setActiveIsolatedNodeId(String id) { this.activeIsolatedNodeId = id; }
 
     public java.io.File getProjectDirectory() { return projectDirectory; }
-    public void setProjectDirectory(java.io.File projectDirectory) { this.projectDirectory = projectDirectory; }
+    public void setProjectDirectory(java.io.File projectDirectory) {
+        this.projectDirectory = projectDirectory;
+        LogBus.init(projectDirectory);
+    }
 
     public Node getCurrentRoot() {
         if (registry == null || activeIsolatedNodeId == null) return null;
@@ -39,13 +50,7 @@ public class EditorSession {
     public Node getSelectedNode() { return selectedNode; }
     public void setSelectedNode(Node node) {
         this.selectedNode = node;
-        for (Runnable listener : selectionListeners) {
-            listener.run();
-        }
-    }
-
-    public void addSelectionListener(Runnable listener) {
-        selectionListeners.add(listener);
+        SignalBus.emit(EditorSignals.NODE_SELECTED, node);
     }
 
     public Vec2 getViewportCameraPos() { return viewportCameraPos; }
@@ -71,21 +76,9 @@ public class EditorSession {
             com.twodjnr.engine.core.Node2D node2d = (com.twodjnr.engine.core.Node2D) child;
             Vec2 pos = node2d.getGlobalPosition();
             Vec2 scale = node2d.getScale();
-            float w, h;
-            if (node2d instanceof Body2D b) {
-                w = b.getSize().x * scale.x;
-                h = b.getSize().y * scale.y;
-            } else if (node2d instanceof Area2D a) {
-                w = a.getSize().x * scale.x;
-                h = a.getSize().y * scale.y;
-            } else if (node2d instanceof TileMapNode t && t.getTileMap() != null) {
-                var tm = t.getTileMap();
-                w = tm.getWidth() * tm.getTileWidth() * scale.x;
-                h = tm.getHeight() * tm.getTileHeight() * scale.y;
-            } else {
-                w = 32 * scale.x;
-                h = 32 * scale.y;
-            }
+            Vec2 bounds = node2d.getBounds();
+            float w = bounds.x * scale.x;
+            float h = bounds.y * scale.y;
             minX = Math.min(minX, pos.x);
             minY = Math.min(minY, pos.y);
             maxX = Math.max(maxX, pos.x + w);

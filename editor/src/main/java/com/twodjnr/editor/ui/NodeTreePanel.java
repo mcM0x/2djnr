@@ -1,7 +1,11 @@
 package com.twodjnr.editor.ui;
 
 import com.twodjnr.editor.EditorSession;
+import com.twodjnr.editor.log.LogBus;
+import com.twodjnr.editor.signal.EditorSignals;
+import com.twodjnr.engine.signal.SignalBus;
 import com.twodjnr.engine.core.*;
+import com.twodjnr.engine.signal.SubscribeSignal;
 import com.twodjnr.engine.math.Vec2;
 import com.twodjnr.engine.nodes.*;
 
@@ -12,14 +16,12 @@ import java.awt.event.*;
 
 public class NodeTreePanel extends JPanel {
     private final EditorSession session;
-    private final EditorFrame editorFrame;
     private final JTree tree;
     private final DefaultTreeModel treeModel;
     private final DefaultMutableTreeNode rootNode;
 
-    public NodeTreePanel(EditorSession session, EditorFrame editorFrame) {
+    public NodeTreePanel(EditorSession session) {
         this.session = session;
-        this.editorFrame = editorFrame;
         setLayout(new BorderLayout());
         setPreferredSize(new Dimension(200, 400));
         setBorder(BorderFactory.createTitledBorder("Scene"));
@@ -31,6 +33,7 @@ public class NodeTreePanel extends JPanel {
         tree.addTreeSelectionListener(e -> {
             DefaultMutableTreeNode n = (DefaultMutableTreeNode) tree.getLastSelectedPathComponent();
             if (n != null && n.getUserObject() instanceof Node node) {
+                LogBus.log("NodeTreePanel", "SELECT", "node=" + node.getName() + " type=" + node.getClass().getSimpleName());
                 session.setSelectedNode(node);
             }
         });
@@ -46,7 +49,8 @@ public class NodeTreePanel extends JPanel {
                 } else if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
                     DefaultMutableTreeNode n = (DefaultMutableTreeNode) tree.getLastSelectedPathComponent();
                     if (n != null && n.getUserObject() instanceof InstanceNode inst) {
-                        editorFrame.openPrefabTab(inst.getIsolatedNodeId());
+                        LogBus.log("NodeTreePanel", "PREFAB_OPEN_DBL", "id=" + inst.getIsolatedNodeId(),
+                                () -> SignalBus.emit(EditorSignals.PREFAB_OPEN, inst.getIsolatedNodeId()));
                     }
                 }
             }
@@ -62,23 +66,33 @@ public class NodeTreePanel extends JPanel {
         buttons.add(delBtn);
         add(buttons, BorderLayout.SOUTH);
 
-        addBtn.addActionListener(e -> addChildNode());
-        delBtn.addActionListener(e -> deleteSelectedNode());
+        addBtn.addActionListener(e ->
+            LogBus.log("NodeTreePanel", "BTN_ADD_CHILD", null, () -> addChildNode())
+        );
+        delBtn.addActionListener(e ->
+            LogBus.log("NodeTreePanel", "BTN_DELETE_NODE", null, () -> deleteSelectedNode())
+        );
 
-        session.addSelectionListener(() -> {
-            Node sel = session.getSelectedNode();
-            if (sel == null) {
-                tree.clearSelection();
-                return;
-            }
-            // Find the node in the tree and select it
-            DefaultMutableTreeNode found = findNode(rootNode, sel);
-            if (found != null) {
-                TreePath path = new TreePath(found.getPath());
-                tree.setSelectionPath(path);
-                tree.scrollPathToVisible(path);
-            }
-        });
+        SignalBus.register(this);
+    }
+
+    @SubscribeSignal(signalName = "nodeSelected")
+    public void onNodeSelected(Node sel) {
+        if (sel == null) {
+            tree.clearSelection();
+            return;
+        }
+        DefaultMutableTreeNode found = findNode(rootNode, sel);
+        if (found != null) {
+            TreePath path = new TreePath(found.getPath());
+            tree.setSelectionPath(path);
+            tree.scrollPathToVisible(path);
+        }
+    }
+
+    @SubscribeSignal(signalName = "nodeTreeRefresh")
+    public void onNodeTreeRefresh() {
+        refresh();
     }
 
     public void refresh() {
@@ -110,23 +124,30 @@ public class NodeTreePanel extends JPanel {
 
         // Isolate Node → creates prefab
         JMenuItem isolateItem = new JMenuItem("Isolate Node");
-        isolateItem.addActionListener(ev -> isolateSelectedNode(node));
+        isolateItem.addActionListener(ev ->
+            LogBus.log("NodeTreePanel", "CONTEXT_ISOLATE", "node=" + node.getName(),
+                    () -> isolateSelectedNode(node))
+        );
         menu.add(isolateItem);
 
         // InstanceNode options
         if (node instanceof InstanceNode inst) {
             JMenuItem reloadItem = new JMenuItem("Reload from Prefab");
-            reloadItem.addActionListener(ev -> {
-                inst.reloadFromPrefab(session.getRegistry());
-                refresh();
-                editorFrame.repaint();
-            });
+            reloadItem.addActionListener(ev ->
+                LogBus.log("NodeTreePanel", "CONTEXT_RELOAD_PREFAB", "id=" + inst.getIsolatedNodeId(),
+                        () -> {
+                            inst.reloadFromPrefab(session.getRegistry());
+                            refresh();
+                            SignalBus.emit(EditorSignals.REPAINT_REQUEST);
+                        })
+            );
             menu.add(reloadItem);
 
             JMenuItem editPrefabItem = new JMenuItem("Edit Prefab");
-            editPrefabItem.addActionListener(ev -> {
-                editorFrame.openPrefabTab(inst.getIsolatedNodeId());
-            });
+            editPrefabItem.addActionListener(ev ->
+                LogBus.log("NodeTreePanel", "CONTEXT_EDIT_PREFAB", "id=" + inst.getIsolatedNodeId(),
+                        () -> SignalBus.emit(EditorSignals.PREFAB_OPEN, inst.getIsolatedNodeId()))
+            );
             menu.add(editPrefabItem);
         }
 
@@ -141,7 +162,10 @@ public class NodeTreePanel extends JPanel {
         }
 
         String name = JOptionPane.showInputDialog(this, "Prefab name:", node.getName());
-        if (name == null || name.isEmpty()) return;
+        if (name == null || name.isEmpty()) {
+            LogBus.log("NodeTreePanel", "ISOLATE_CANCELLED", "node=" + node.getName());
+            return;
+        }
 
         // Deep copy the subtree
         Node template = node.copy();
@@ -154,10 +178,12 @@ public class NodeTreePanel extends JPanel {
         parent.removeChild(node);
         parent.addChild(instance);
 
-        // Open prefab in new tab
-        editorFrame.openPrefabTab(prefab.getId());
+        LogBus.log("NodeTreePanel", "ISOLATE_NODE",
+                "node=" + node.getName() + " prefab=" + name + " id=" + prefab.getId());
+
+        SignalBus.emit(EditorSignals.PREFAB_OPEN, prefab.getId());
         refresh();
-        editorFrame.repaint();
+        SignalBus.emit(EditorSignals.REPAINT_REQUEST);
     }
 
     private void addChildNode() {
@@ -168,13 +194,17 @@ public class NodeTreePanel extends JPanel {
         String type = (String) JOptionPane.showInputDialog(this,
                 "Choose node type:", "Add Node",
                 JOptionPane.PLAIN_MESSAGE, null, types, "Node2D");
-        if (type == null) return;
+        if (type == null) {
+            LogBus.log("NodeTreePanel", "ADD_CHILD_CANCELLED", "parent=" + parent.getName());
+            return;
+        }
 
         Node child = createNodeOfType(type);
         if (child == null) return;
         int count = parent.getChildren().size() + 1;
         child.setName(type + count);
         parent.addChild(child);
+        LogBus.log("NodeTreePanel", "ADD_CHILD", "type=" + type + " name=" + child.getName() + " parent=" + parent.getName());
         refresh();
     }
 
@@ -194,6 +224,7 @@ public class NodeTreePanel extends JPanel {
         DefaultMutableTreeNode n = (DefaultMutableTreeNode) tree.getLastSelectedPathComponent();
         if (n == null || !(n.getUserObject() instanceof Node node)) return;
         if (node == session.getCurrentRoot()) return;
+        LogBus.log("NodeTreePanel", "DELETE_NODE", "name=" + node.getName() + " type=" + node.getClass().getSimpleName());
         node.queueFree();
         if (session.getSelectedNode() == node) session.setSelectedNode(null);
         refresh();

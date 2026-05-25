@@ -50,9 +50,10 @@ public class PlayTestLauncher {
 
             AssetManager assets = new AssetManager();
             File projectDir = session.getProjectDirectory();
-            if (projectDir != null) {
-                assets.setProjectRoot(projectDir);
+            if (projectDir == null) {
+                projectDir = new File(System.getProperty("user.dir"));
             }
+            assets.setProjectRoot(projectDir);
             RenderServer renderServer = new RenderServer(window.getWidth(), window.getHeight(), assets);
 
             long lastTime = System.nanoTime();

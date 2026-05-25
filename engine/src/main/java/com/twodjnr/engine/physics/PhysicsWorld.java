@@ -8,6 +8,8 @@ import com.twodjnr.engine.nodes.Area2D;
 import com.twodjnr.engine.nodes.Body2D;
 import com.twodjnr.engine.nodes.TileMapNode;
 import com.twodjnr.engine.nodes.WorldEnvironment;
+import com.twodjnr.engine.signal.EngineSignals;
+import com.twodjnr.engine.signal.SignalBus;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -112,7 +114,7 @@ public class PhysicsWorld {
             AABB areaBox = getAreaBounds(area);
             for (Body2D body : bodies) {
                 if (areaBox.intersects(getBodyBounds(body))) {
-                    area.emitSignal("onBodyEntered", body);
+                    SignalBus.emit(EngineSignals.ON_BODY_ENTERED, area, body);
                 }
             }
         }

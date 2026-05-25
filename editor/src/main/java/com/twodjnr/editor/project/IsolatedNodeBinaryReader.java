@@ -8,8 +8,7 @@ import com.twodjnr.engine.math.Vec2;
 
 import java.io.*;
 import java.lang.reflect.Field;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 
 public class IsolatedNodeBinaryReader {
 
@@ -29,7 +28,7 @@ public class IsolatedNodeBinaryReader {
         }
 
         int version = in.readInt();
-        if (version != BinaryFormatConstants.VERSION) {
+        if (version < 1 || version > BinaryFormatConstants.VERSION) {
             throw new IOException("Unsupported version: " + version);
         }
 
@@ -43,12 +42,12 @@ public class IsolatedNodeBinaryReader {
             stringTable.add(in.readUTF());
         }
 
-        Node root = readNode(in, stringTable);
+        Node root = readNode(in, stringTable, version);
 
         return new IsolatedNode(id, name, root, lastModified);
     }
 
-    private static Node readNode(DataInputStream in, List<String> stringTable) throws IOException {
+    private static Node readNode(DataInputStream in, List<String> stringTable, int version) throws IOException {
         int typeNameIdx = in.readInt();
         int nameIdx = in.readInt();
         int childCount = in.readInt();
@@ -70,8 +69,18 @@ public class IsolatedNodeBinaryReader {
             }
         }
 
+        // Prefab references (added in version 2)
+        if (version >= 2) {
+            int refCount = in.readInt();
+            for (int i = 0; i < refCount; i++) {
+                String fieldName = stringTable.get(in.readInt());
+                String prefabId = stringTable.get(in.readInt());
+                node.setPrefabReference(fieldName, prefabId);
+            }
+        }
+
         for (int i = 0; i < childCount; i++) {
-            Node child = readNode(in, stringTable);
+            Node child = readNode(in, stringTable, version);
             node.addChild(child);
         }
 

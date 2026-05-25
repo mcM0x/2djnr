@@ -55,24 +55,5 @@ public class InstanceNode extends Node {
         setName(snapshot.getName());
     }
 
-    @Override
-    public void render(java.awt.Graphics2D g2d, float opacity) {
-        super.render(g2d, opacity);
-        // Draw a small prefab icon (lock symbol) at the top-left corner
-        Vec2 pos = new Vec2(0, 0);
-        Node current = this;
-        while (current != null) {
-            if (current instanceof Node2D n2d) {
-                pos = n2d.getGlobalPosition();
-                break;
-            }
-            current = current.getParent();
-        }
-        int x = Math.round(pos.x);
-        int y = Math.round(pos.y);
-        g2d.setColor(java.awt.Color.ORANGE);
-        g2d.fillRect(x - 4, y - 4, 8, 8);
-        g2d.setColor(java.awt.Color.BLACK);
-        g2d.drawRect(x - 4, y - 4, 8, 8);
-    }
+
 }

@@ -2,11 +2,14 @@ package com.twodjnr.engine.render;
 
 import com.twodjnr.engine.core.Node;
 import com.twodjnr.engine.core.Node2D;
+import com.twodjnr.engine.level.TileSet;
 import com.twodjnr.engine.math.Vec2;
 import com.twodjnr.engine.nodes.*;
 
 import java.util.ArrayList;
 import java.util.List;
+
+import static org.lwjgl.opengl.GL33.*;
 
 public class RenderServer {
     private final SpriteBatch batch;
@@ -26,6 +29,8 @@ public class RenderServer {
     }
 
     public void render(Node root, int viewportW, int viewportH) {
+        glClear(GL_COLOR_BUFFER_BIT);
+
         // Find active camera
         Camera2D activeCamera = findCamera(root);
         if (activeCamera != null) {
@@ -61,7 +66,7 @@ public class RenderServer {
         shader.setMat4("uMVP", camera.getCombined());
 
         batch.begin();
-        renderGrid();
+        renderAxes();
         renderNode(root);
         batch.end();
 
@@ -70,46 +75,27 @@ public class RenderServer {
         }
     }
 
-    private void renderGrid() {
+    private void renderAxes() {
         float left = camera.getPositionX() - camera.getViewportWidth() / (2.0f * camera.getZoom());
         float right = camera.getPositionX() + camera.getViewportWidth() / (2.0f * camera.getZoom());
         float top = camera.getPositionY() - camera.getViewportHeight() / (2.0f * camera.getZoom());
         float bottom = camera.getPositionY() + camera.getViewportHeight() / (2.0f * camera.getZoom());
+        float axisWidth = Math.max(2.0f / camera.getZoom(), 1.0f);
 
-        final int GRID_SIZE = 32;
-        float lineWidth = Math.max(1.0f / camera.getZoom(), 0.5f);
-
-        int startX = (int) Math.floor(left / GRID_SIZE) * GRID_SIZE;
-        int endX = (int) Math.ceil(right / GRID_SIZE) * GRID_SIZE;
-        int startY = (int) Math.floor(top / GRID_SIZE) * GRID_SIZE;
-        int endY = (int) Math.ceil(bottom / GRID_SIZE) * GRID_SIZE;
-
-        for (int x = startX; x <= endX; x += GRID_SIZE) {
-            batch.draw(x, top, lineWidth, bottom - top, 0.3f, 0.3f, 0.3f, 0.3f);
+        if (0 >= top && 0 <= bottom) {
+            batch.draw(left, 0, right - left, axisWidth, 1.0f, 0.2f, 0.2f, 1.0f);
         }
-        for (int y = startY; y <= endY; y += GRID_SIZE) {
-            batch.draw(left, y, right - left, lineWidth, 0.3f, 0.3f, 0.3f, 0.3f);
+        if (0 >= left && 0 <= right) {
+            batch.draw(0, top, axisWidth, bottom - top, 0.2f, 1.0f, 0.2f, 1.0f);
         }
     }
 
     private void renderSelectionOutline(Node2D selected) {
         Vec2 pos = selected.getGlobalPosition();
         Vec2 scale = selected.getScale();
-        float sw, sh;
-        if (selected instanceof Body2D b) {
-            sw = b.getSize().x * scale.x;
-            sh = b.getSize().y * scale.y;
-        } else if (selected instanceof Area2D a) {
-            sw = a.getSize().x * scale.x;
-            sh = a.getSize().y * scale.y;
-        } else if (selected instanceof TileMapNode t && t.getTileMap() != null) {
-            var tm = t.getTileMap();
-            sw = tm.getWidth() * tm.getTileWidth() * scale.x;
-            sh = tm.getHeight() * tm.getTileHeight() * scale.y;
-        } else {
-            sw = 32 * scale.x;
-            sh = 32 * scale.y;
-        }
+        Vec2 bounds = selected.getBounds();
+        float sw = bounds.x * scale.x;
+        float sh = bounds.y * scale.y;
 
         float outset = Math.max(2.0f / camera.getZoom(), 1.0f);
         float bx = pos.x - outset;
@@ -181,13 +167,38 @@ public class RenderServer {
         Vec2 pos = tileMapNode.getGlobalPosition();
         int tw = tileMap.getTileWidth();
         int th = tileMap.getTileHeight();
+
+        TileSet tileSet = tileMapNode.getTileSet();
+        Texture spritesheet = null;
+        String sheetPath = tileSet != null ? tileSet.getSpritesheetPath() : null;
+        if (sheetPath != null && !sheetPath.isEmpty() && assets != null) {
+            Texture tex = assets.getTexture(sheetPath);
+            if (tex != null) {
+                spritesheet = tex;
+                batch.flush();
+                spritesheet.bind();
+            }
+        }
+
         for (int y = 0; y < tileMap.getHeight(); y++) {
             for (int x = 0; x < tileMap.getWidth(); x++) {
-                if (tileMap.getTile(x, y) == 1) { // SOLID
+                int tileId = tileMap.getTile(x, y);
+                if (tileId == 0) continue;
+                if (spritesheet != null && tileSet != null) {
+                    TileSet.TileRegion region = tileSet.getRegion(tileId);
+                    if (region != null) {
+                        float u1 = (float) region.getSheetX() / spritesheet.getWidth();
+                        float v1 = (float) region.getSheetY() / spritesheet.getHeight();
+                        float u2 = (float) (region.getSheetX() + region.getWidth()) / spritesheet.getWidth();
+                        float v2 = (float) (region.getSheetY() + region.getHeight()) / spritesheet.getHeight();
+                        batch.draw(pos.x + x * tw, pos.y + y * th, tw, th, u1, v1, u2, v2, 1, 1, 1, 1);
+                    }
+                } else {
                     batch.draw(pos.x + x * tw, pos.y + y * th, tw, th, 0.4f, 0.4f, 0.4f, 1.0f);
                 }
             }
         }
+        tileMapNode.drawGrid(batch, camera.getZoom());
     }
 
     private Camera2D findCamera(Node node) {

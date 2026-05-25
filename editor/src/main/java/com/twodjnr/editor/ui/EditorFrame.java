@@ -3,10 +3,15 @@ package com.twodjnr.editor.ui;
 import com.twodjnr.editor.EditorSession;
 import com.twodjnr.editor.ScriptCompiler;
 import com.twodjnr.editor.canvas.LWJGLEditorViewport;
+import com.twodjnr.editor.log.LogBus;
+import com.twodjnr.editor.log.LogWindow;
 import com.twodjnr.editor.project.IsolatedNodeSerializer;
 import com.twodjnr.editor.project.Project;
 import com.twodjnr.editor.project.ProjectSerializer;
+import com.twodjnr.editor.signal.EditorSignals;
+import com.twodjnr.engine.signal.SignalBus;
 import com.twodjnr.engine.core.*;
+import com.twodjnr.engine.signal.SubscribeSignal;
 import com.twodjnr.engine.math.Vec2;
 import com.twodjnr.engine.nodes.*;
 
@@ -26,6 +31,7 @@ public class EditorFrame extends JFrame {
     private final JTabbedPane tabPane;
     private final AssetExplorerPanel assetExplorerPanel;
     private final JPanel sidePanelContainer;
+    private LogWindow logWindow;
 
     public EditorFrame() {
         super("2DJNR Editor");
@@ -55,9 +61,9 @@ public class EditorFrame extends JFrame {
         coordLabel.setFont(new Font("Monospaced", Font.PLAIN, 12));
         coordLabel.setBorder(BorderFactory.createEmptyBorder(2, 10, 2, 10));
 
-        nodeTreePanel = new NodeTreePanel(session, this);
+        nodeTreePanel = new NodeTreePanel(session);
         nodeInspector = new NodeInspector(session);
-        assetExplorerPanel = new AssetExplorerPanel(session, this);
+        assetExplorerPanel = new AssetExplorerPanel(session);
 
         // Side panel always shows the Asset Explorer
         sidePanelContainer = new JPanel(new BorderLayout());
@@ -66,7 +72,7 @@ public class EditorFrame extends JFrame {
         // Tab pane
         tabPane = new JTabbedPane();
         tabPane.addTab("MainScene", new JPanel());
-        tabPane.setTabComponentAt(0, new ClosableTabComponent(this, "MainScene", mainScene.getId()));
+        tabPane.setTabComponentAt(0, new ClosableTabComponent("MainScene", mainScene.getId()));
         tabPane.addTab("+", new JPanel());
         tabPane.setEnabledAt(1, false); // "+" tab is not a real tab
 
@@ -95,9 +101,11 @@ public class EditorFrame extends JFrame {
                     Math.round(camPos.x), Math.round(camPos.y), zoom));
         }).start();
 
+        SignalBus.register(this);
+
         SwingUtilities.invokeLater(() -> {
-            nodeTreePanel.refresh();
-            nodeInspector.refresh();
+            SignalBus.emit(EditorSignals.NODE_TREE_REFRESH);
+            SignalBus.emit(EditorSignals.INSPECTOR_REFRESH);
         });
     }
 
@@ -109,6 +117,21 @@ public class EditorFrame extends JFrame {
         startViewport();
     }
 
+    @SubscribeSignal(signalName = "prefabOpen")
+    public void onPrefabOpen(String isolatedNodeId) {
+        openPrefabTab(isolatedNodeId);
+    }
+
+    @SubscribeSignal(signalName = "tabClose")
+    public void onTabClose(String isolatedNodeId) {
+        closeTabById(isolatedNodeId);
+    }
+
+    @SubscribeSignal(signalName = "repaintRequest")
+    public void onRepaintRequest() {
+        repaint();
+    }
+
     private String getTabIdAt(int index) {
         java.awt.Component comp = tabPane.getTabComponentAt(index);
         if (comp instanceof ClosableTabComponent ctc) {
@@ -118,10 +141,11 @@ public class EditorFrame extends JFrame {
     }
 
     public void switchToTab(String isolatedNodeId) {
+        LogBus.log("EditorFrame", "TAB_SWITCH", "id=" + isolatedNodeId);
         session.setActiveIsolatedNodeId(isolatedNodeId);
-        nodeTreePanel.refresh();
-        nodeInspector.refresh();
-        assetExplorerPanel.refresh();
+        SignalBus.emit(EditorSignals.NODE_TREE_REFRESH);
+        SignalBus.emit(EditorSignals.INSPECTOR_REFRESH);
+        SignalBus.emit(EditorSignals.EXPLORER_REFRESH);
         session.resetCameraToFit(session.getCurrentRoot(), viewport.getWidth(), viewport.getHeight());
     }
 
@@ -131,6 +155,7 @@ public class EditorFrame extends JFrame {
             String id = getTabIdAt(i);
             if (isolatedNodeId.equals(id)) {
                 tabPane.setSelectedIndex(i);
+                LogBus.log("EditorFrame", "TAB_SELECT_EXISTING", "id=" + isolatedNodeId);
                 return;
             }
         }
@@ -138,11 +163,13 @@ public class EditorFrame extends JFrame {
         if (node == null) return;
         int insertIdx = tabPane.getTabCount() - 1;
         tabPane.insertTab(node.getName(), null, new JPanel(), null, insertIdx);
-        tabPane.setTabComponentAt(insertIdx, new ClosableTabComponent(this, node.getName(), isolatedNodeId));
+        tabPane.setTabComponentAt(insertIdx, new ClosableTabComponent(node.getName(), isolatedNodeId));
         tabPane.setSelectedIndex(insertIdx);
+        LogBus.log("EditorFrame", "TAB_OPEN", "name=" + node.getName() + " id=" + isolatedNodeId);
     }
 
     public void closeTabById(String isolatedNodeId) {
+        LogBus.log("EditorFrame", "TAB_CLOSE", "id=" + isolatedNodeId);
         int closeIdx = -1;
         for (int i = 0; i < tabPane.getTabCount() - 1; i++) {
             String id = getTabIdAt(i);
@@ -164,7 +191,7 @@ public class EditorFrame extends JFrame {
                 IsolatedNode entry = session.getRegistry().get(entryId);
                 if (entry != null) {
                     tabPane.insertTab(entry.getName(), null, new JPanel(), null, 0);
-                    tabPane.setTabComponentAt(0, new ClosableTabComponent(this, entry.getName(), entryId));
+                    tabPane.setTabComponentAt(0, new ClosableTabComponent(entry.getName(), entryId));
                     tabPane.setSelectedIndex(0);
                 }
             } else {
@@ -174,12 +201,17 @@ public class EditorFrame extends JFrame {
     }
 
     private void createNewIsolatedNode() {
-        String name = JOptionPane.showInputDialog(this, "New Isolated Node name:", "Node" + (session.getRegistry().getAll().size() + 1));
-        if (name == null || name.isEmpty()) return;
+        String defaultName = "Node" + (session.getRegistry().getAll().size() + 1);
+        String name = JOptionPane.showInputDialog(this, "New Isolated Node name:", defaultName);
+        if (name == null || name.isEmpty()) {
+            LogBus.log("EditorFrame", "TAB_NEW", "cancelled");
+            return;
+        }
         Node root = new Node();
         root.setName(name);
         IsolatedNode node = new IsolatedNode(name, root);
         session.getRegistry().register(node);
+        LogBus.log("EditorFrame", "TAB_NEW", "name=" + name + " id=" + node.getId());
         openPrefabTab(node.getId());
     }
 
@@ -198,7 +230,8 @@ public class EditorFrame extends JFrame {
         if (child != null) {
             child.setName(type + (parent.getChildren().size() + 1));
             parent.addChild(child);
-            nodeTreePanel.refresh();
+            LogBus.log("EditorFrame", "ADD_NODE", "type=" + type + " parent=" + parent.getName());
+            SignalBus.emit(EditorSignals.NODE_TREE_REFRESH);
         }
     }
 
@@ -215,7 +248,106 @@ public class EditorFrame extends JFrame {
     }
 
     private void launchPlayTest() {
-        com.twodjnr.editor.PlayTestLauncher.launch(session);
+        LogBus.log("EditorFrame", "PLAY_TEST", null,
+                () -> com.twodjnr.editor.PlayTestLauncher.launch(session));
+    }
+
+    private void toggleLogConsole() {
+        if (logWindow == null) {
+            logWindow = new LogWindow(this);
+        }
+        logWindow.setVisible(!logWindow.isVisible());
+        if (logWindow.isVisible()) {
+            logWindow.toFront();
+        }
+    }
+
+    private void showProjectSettingsDialog() {
+        Project project = session.getProject();
+        if (project == null) return;
+
+        JDialog dialog = new JDialog(this, "Project Settings", true);
+        JPanel form = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(4, 8, 4, 8);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+
+        JTextField titleField = new JTextField(project.getTitle(), 20);
+
+        JSpinner widthSpinner = new JSpinner(new SpinnerNumberModel(project.getWindowWidth(), 320, 4096, 1));
+        JSpinner heightSpinner = new JSpinner(new SpinnerNumberModel(project.getWindowHeight(), 240, 4096, 1));
+        JSpinner fpsSpinner = new JSpinner(new SpinnerNumberModel(project.getTargetFps(), 1, 240, 1));
+        JSpinner physicsSpinner = new JSpinner(new SpinnerNumberModel(project.getPhysicsFps(), 1, 240, 1));
+
+        JComboBox<String> entryCombo = new JComboBox<>();
+        entryCombo.addItem("(none)");
+        String currentEntry = project.getEntryPoint();
+        int selectedIdx = 0;
+        int idx = 0;
+        for (IsolatedNode node : session.getRegistry().getAll()) {
+            String item = node.getName() + " (" + node.getId() + ")";
+            entryCombo.addItem(item);
+            if (node.getId().equals(currentEntry)) {
+                selectedIdx = idx + 1;
+            }
+            idx++;
+        }
+        entryCombo.setSelectedIndex(selectedIdx);
+
+        int row = 0;
+        addLabeledField(form, gbc, row++, "Title:", titleField);
+        addLabeledField(form, gbc, row++, "Window Width:", widthSpinner);
+        addLabeledField(form, gbc, row++, "Window Height:", heightSpinner);
+        addLabeledField(form, gbc, row++, "Target FPS:", fpsSpinner);
+        addLabeledField(form, gbc, row++, "Physics FPS:", physicsSpinner);
+        addLabeledField(form, gbc, row++, "Entry Point:", entryCombo);
+
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        JButton okBtn = new JButton("OK");
+        JButton cancelBtn = new JButton("Cancel");
+        buttonPanel.add(okBtn);
+        buttonPanel.add(cancelBtn);
+
+        dialog.setLayout(new BorderLayout());
+        dialog.add(form, BorderLayout.CENTER);
+        dialog.add(buttonPanel, BorderLayout.SOUTH);
+        dialog.pack();
+        dialog.setLocationRelativeTo(this);
+        dialog.setResizable(false);
+
+        okBtn.addActionListener(e -> {
+            project.setTitle(titleField.getText());
+            project.setWindowWidth((Integer) widthSpinner.getValue());
+            project.setWindowHeight((Integer) heightSpinner.getValue());
+            project.setTargetFps((Integer) fpsSpinner.getValue());
+            project.setPhysicsFps((Integer) physicsSpinner.getValue());
+            String entryId = null;
+            if (entryCombo.getSelectedIndex() > 0) {
+                String selected = (String) entryCombo.getSelectedItem();
+                entryId = selected.substring(selected.indexOf('(') + 1, selected.indexOf(')'));
+                project.setEntryPoint(entryId);
+            } else {
+                project.setEntryPoint(null);
+            }
+            LogBus.log("EditorFrame", "PROJECT_SETTINGS_OK",
+                    "title=" + project.getTitle()
+                    + " w=" + project.getWindowWidth() + " h=" + project.getWindowHeight()
+                    + " fps=" + project.getTargetFps() + " entry=" + entryId);
+            dialog.dispose();
+        });
+        cancelBtn.addActionListener(e -> dialog.dispose());
+
+        dialog.setVisible(true);
+    }
+
+    private void addLabeledField(JPanel panel, GridBagConstraints gbc, int row, String label, Component field) {
+        gbc.gridx = 0;
+        gbc.gridy = row;
+        gbc.weightx = 0;
+        panel.add(new JLabel(label), gbc);
+        gbc.gridx = 1;
+        gbc.weightx = 1;
+        panel.add(field, gbc);
     }
 
     private void saveAllIsolatedNodes(File projectDir) throws IOException {
@@ -251,27 +383,43 @@ public class EditorFrame extends JFrame {
         fileMenu.setMnemonic(KeyEvent.VK_F);
 
         JMenuItem newItem = new JMenuItem("New Project");
-        newItem.addActionListener(e -> doNewProject());
+        newItem.addActionListener(e ->
+            LogBus.log("EditorFrame", "MENU_NEW_PROJECT", null, () -> doNewProject())
+        );
 
         JMenuItem openItem = new JMenuItem("Open Project...");
-        openItem.addActionListener(e -> doOpenProject());
+        openItem.addActionListener(e ->
+            LogBus.log("EditorFrame", "MENU_OPEN_PROJECT", null, () -> doOpenProject())
+        );
 
         JMenuItem saveItem = new JMenuItem("Save Project");
-        saveItem.addActionListener(e -> doSaveProject());
+        saveItem.addActionListener(e ->
+            LogBus.log("EditorFrame", "MENU_SAVE_PROJECT", null, () -> doSaveProject())
+        );
 
         JMenuItem exitItem = new JMenuItem("Exit");
-        exitItem.addActionListener(e -> System.exit(0));
+        exitItem.addActionListener(e ->
+            LogBus.log("EditorFrame", "MENU_EXIT", null, () -> System.exit(0))
+        );
 
         fileMenu.add(newItem);
         fileMenu.add(openItem);
         fileMenu.addSeparator();
         fileMenu.add(saveItem);
         fileMenu.addSeparator();
+        JMenuItem settingsItem = new JMenuItem("Project Settings...");
+        settingsItem.addActionListener(e ->
+            LogBus.log("EditorFrame", "MENU_PROJECT_SETTINGS", null, () -> showProjectSettingsDialog())
+        );
+        fileMenu.add(settingsItem);
+        fileMenu.addSeparator();
         fileMenu.add(exitItem);
 
         JMenu sceneMenu = new JMenu("Scene");
         JMenuItem addNodeItem = new JMenuItem("Add Node...");
-        addNodeItem.addActionListener(e -> showAddNodeDialog());
+        addNodeItem.addActionListener(e ->
+            LogBus.log("EditorFrame", "MENU_ADD_NODE", null, () -> showAddNodeDialog())
+        );
         sceneMenu.add(addNodeItem);
 
         JMenu runMenu = new JMenu("Run");
@@ -280,9 +428,15 @@ public class EditorFrame extends JFrame {
         playItem.addActionListener(e -> launchPlayTest());
         runMenu.add(playItem);
 
+        JMenu viewMenu = new JMenu("View");
+        JMenuItem logItem = new JMenuItem("Log Console");
+        logItem.addActionListener(e -> toggleLogConsole());
+        viewMenu.add(logItem);
+
         menuBar.add(fileMenu);
         menuBar.add(sceneMenu);
         menuBar.add(runMenu);
+        menuBar.add(viewMenu);
         setJMenuBar(menuBar);
     }
 
@@ -301,28 +455,30 @@ public class EditorFrame extends JFrame {
     }
 
     private void doNewProject() {
-        IsolatedNodeRegistry registry = new IsolatedNodeRegistry();
-        Node root = new Node();
-        root.setName("MainScene");
-        IsolatedNode mainScene = new IsolatedNode("MainScene", root);
-        registry.register(mainScene);
+        LogBus.log("EditorFrame", "NEW_PROJECT", null, () -> {
+            IsolatedNodeRegistry registry = new IsolatedNodeRegistry();
+            Node root = new Node();
+            root.setName("MainScene");
+            IsolatedNode mainScene = new IsolatedNode("MainScene", root);
+            registry.register(mainScene);
 
-        Project p = new Project();
-        p.setEntryPoint(mainScene.getId());
+            Project p = new Project();
+            p.setEntryPoint(mainScene.getId());
 
-        session.setProject(p);
-        session.setRegistry(registry);
-        session.setActiveIsolatedNodeId(mainScene.getId());
+            session.setProject(p);
+            session.setRegistry(registry);
+            session.setActiveIsolatedNodeId(mainScene.getId());
+            session.setProjectDirectory(null);
 
-        // Rebuild tabs
-        tabPane.removeAll();
-        tabPane.addTab("MainScene", new JPanel());
-        tabPane.setTabComponentAt(0, new ClosableTabComponent(this, "MainScene", mainScene.getId()));
-        tabPane.addTab("+", new JPanel());
-        tabPane.setEnabledAt(1, false);
-        tabPane.setSelectedIndex(0);
+            tabPane.removeAll();
+            tabPane.addTab("MainScene", new JPanel());
+            tabPane.setTabComponentAt(0, new ClosableTabComponent("MainScene", mainScene.getId()));
+            tabPane.addTab("+", new JPanel());
+            tabPane.setEnabledAt(1, false);
+            tabPane.setSelectedIndex(0);
 
-        switchToTab(mainScene.getId());
+            switchToTab(mainScene.getId());
+        });
     }
 
     private void doOpenProject() {
@@ -330,39 +486,41 @@ public class EditorFrame extends JFrame {
         chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("JSON Project", "json"));
         if (chooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
             File file = chooser.getSelectedFile();
-            try {
-                Project p = ProjectSerializer.load(file);
-                session.setProject(p);
-                File projectDir = file.getParentFile();
-                session.setProjectDirectory(projectDir);
+            LogBus.log("EditorFrame", "OPEN_PROJECT", file.getAbsolutePath(), () -> {
+                try {
+                    Project p = ProjectSerializer.load(file);
+                    session.setProject(p);
+                    File projectDir = file.getParentFile();
+                    session.setProjectDirectory(projectDir);
 
-                IsolatedNodeRegistry registry = new IsolatedNodeRegistry();
-                session.setRegistry(registry);
-                loadAllIsolatedNodes(projectDir);
+                    IsolatedNodeRegistry registry = new IsolatedNodeRegistry();
+                    session.setRegistry(registry);
+                    loadAllIsolatedNodes(projectDir);
 
-                String entryId = p.getEntryPoint();
-                if (entryId != null && registry.get(entryId) != null) {
-                    session.setActiveIsolatedNodeId(entryId);
+                    String entryId = p.getEntryPoint();
+                    if (entryId != null && registry.get(entryId) != null) {
+                        session.setActiveIsolatedNodeId(entryId);
+                    }
+
+                    tabPane.removeAll();
+                    String entryName = entryId != null && registry.get(entryId) != null
+                            ? registry.get(entryId).getName() : "MainScene";
+                    tabPane.addTab(entryName, new JPanel());
+                    int tabIdx = 0;
+                    if (entryId != null) {
+                        tabPane.setTabComponentAt(tabIdx, new ClosableTabComponent(entryName, entryId));
+                    }
+                    tabPane.addTab("+", new JPanel());
+                    tabPane.setEnabledAt(tabIdx + 1, false);
+                    tabPane.setSelectedIndex(0);
+
+                    switchToTab(entryId);
+                    SignalBus.emit(EditorSignals.NODE_TREE_REFRESH);
+                    SignalBus.emit(EditorSignals.INSPECTOR_REFRESH);
+                } catch (IOException ex) {
+                    JOptionPane.showMessageDialog(this, "Failed to open: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
                 }
-
-                tabPane.removeAll();
-                String entryName = entryId != null && registry.get(entryId) != null
-                        ? registry.get(entryId).getName() : "MainScene";
-                tabPane.addTab(entryName, new JPanel());
-                int tabIdx = 0;
-                if (entryId != null) {
-                    tabPane.setTabComponentAt(tabIdx, new ClosableTabComponent(this, entryName, entryId));
-                }
-                tabPane.addTab("+", new JPanel());
-                tabPane.setEnabledAt(tabIdx + 1, false);
-                tabPane.setSelectedIndex(0);
-
-                switchToTab(entryId);
-                nodeTreePanel.refresh();
-                nodeInspector.refresh();
-            } catch (IOException ex) {
-                JOptionPane.showMessageDialog(this, "Failed to open: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
-            }
+            });
         }
     }
 
@@ -373,26 +531,28 @@ public class EditorFrame extends JFrame {
         if (chooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
             File dir = chooser.getSelectedFile();
             if (dir == null) return;
-            if (!dir.exists() && !dir.mkdirs()) {
-                JOptionPane.showMessageDialog(this, "Failed to create directory", "Error", JOptionPane.ERROR_MESSAGE);
-                return;
-            }
-            File projectFile = new File(dir, "project.json");
-            try {
-                session.setProjectDirectory(dir);
-                saveAllIsolatedNodes(dir);
-                ProjectSerializer.save(session.getProject(), projectFile);
-
-                ScriptCompiler.Result scriptResult = ScriptCompiler.compile(dir);
-                if (!scriptResult.success()) {
-                    String msg = "Script compilation errors:\n" + String.join("\n", scriptResult.diagnostics());
-                    JOptionPane.showMessageDialog(this, msg, "Script Errors", JOptionPane.WARNING_MESSAGE);
+            LogBus.log("EditorFrame", "SAVE_PROJECT", dir.getAbsolutePath(), () -> {
+                if (!dir.exists() && !dir.mkdirs()) {
+                    JOptionPane.showMessageDialog(this, "Failed to create directory", "Error", JOptionPane.ERROR_MESSAGE);
+                    return;
                 }
+                File projectFile = new File(dir, "project.json");
+                try {
+                    session.setProjectDirectory(dir);
+                    saveAllIsolatedNodes(dir);
+                    ProjectSerializer.save(session.getProject(), projectFile);
 
-                JOptionPane.showMessageDialog(this, "Saved to " + dir.getAbsolutePath(), "Saved", JOptionPane.INFORMATION_MESSAGE);
-            } catch (IOException ex) {
-                JOptionPane.showMessageDialog(this, "Failed to save: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
-            }
+                    ScriptCompiler.Result scriptResult = ScriptCompiler.compile(dir);
+                    if (!scriptResult.success()) {
+                        String msg = "Script compilation errors:\n" + String.join("\n", scriptResult.diagnostics());
+                        JOptionPane.showMessageDialog(this, msg, "Script Errors", JOptionPane.WARNING_MESSAGE);
+                    }
+
+                    JOptionPane.showMessageDialog(this, "Saved to " + dir.getAbsolutePath(), "Saved", JOptionPane.INFORMATION_MESSAGE);
+                } catch (IOException ex) {
+                    JOptionPane.showMessageDialog(this, "Failed to save: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                }
+            });
         }
     }
 }

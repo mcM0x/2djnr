@@ -33,27 +33,7 @@ public class Body2D extends Node2D {
     public void setOnGround(boolean onGround) { this.onGround = onGround; }
 
     @Override
-    protected void drawLocal(java.awt.Graphics2D g2d, float opacity) {
-        java.awt.Color base;
-        if (isStatic) {
-            base = java.awt.Color.GRAY;
-        } else if (isKinematic) {
-            base = java.awt.Color.ORANGE;
-        } else {
-            base = java.awt.Color.GREEN;
-        }
-        java.awt.Color color = new java.awt.Color(
-                base.getRed(), base.getGreen(), base.getBlue(),
-                Math.round(255 * opacity)
-        );
-        int w = Math.round(size.x);
-        int h = Math.round(size.y);
-        g2d.setColor(color);
-        g2d.fillRect(0, 0, w, h);
-        g2d.setColor(java.awt.Color.BLACK);
-        g2d.drawRect(0, 0, w, h);
-        String label = getName().isEmpty() ? getClass().getSimpleName() : getName();
-        g2d.setColor(java.awt.Color.WHITE);
-        g2d.drawString(label, 2, Math.max(12, h - 2));
+    public Vec2 getBounds() {
+        return size;
     }
 }

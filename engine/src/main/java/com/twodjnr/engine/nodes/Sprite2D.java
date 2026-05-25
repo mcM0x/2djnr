@@ -4,7 +4,7 @@ import com.twodjnr.engine.core.Export;
 import com.twodjnr.engine.core.Node2D;
 
 public class Sprite2D extends Node2D {
-    @Export(name = "Texture Path")
+    @Export(name = "Texture Path", hint = "texture")
     private String texturePath = "";
 
     @Export(name = "Modulate R")
@@ -46,23 +46,5 @@ public class Sprite2D extends Node2D {
     public boolean isFlipV() { return flipV; }
     public void setFlipV(boolean flipV) { this.flipV = flipV; }
 
-    @Override
-    protected void drawLocal(java.awt.Graphics2D g2d, float opacity) {
-        java.awt.Color base = new java.awt.Color(
-                Math.round(255 * modulateR),
-                Math.round(255 * modulateG),
-                Math.round(255 * modulateB)
-        );
-        java.awt.Color color = new java.awt.Color(
-                base.getRed(), base.getGreen(), base.getBlue(),
-                Math.round(255 * opacity * modulateA)
-        );
-        g2d.setColor(color);
-        g2d.fillRect(0, 0, 32, 32);
-        g2d.setColor(java.awt.Color.BLACK);
-        g2d.drawRect(0, 0, 32, 32);
-        String label = getName().isEmpty() ? getClass().getSimpleName() : getName();
-        g2d.setColor(java.awt.Color.WHITE);
-        g2d.drawString(label, 2, 30);
-    }
+
 }

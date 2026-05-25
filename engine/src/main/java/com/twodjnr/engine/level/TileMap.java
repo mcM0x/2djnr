@@ -4,9 +4,9 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 public class TileMap {
-    private final int[][] tileIds;
-    private final int width;
-    private final int height;
+    private int[][] tileIds;
+    private int width;
+    private int height;
     private int tileWidth;
     private int tileHeight;
 
@@ -48,6 +48,28 @@ public class TileMap {
     public int getWidth() { return width; }
     public int getHeight() { return height; }
     public int[][] getTileIds() { return tileIds; }
+
+    public void setWidth(int newWidth) {
+        if (newWidth < 1 || newWidth == width) return;
+        int[][] newIds = new int[height][newWidth];
+        int copyCols = Math.min(width, newWidth);
+        for (int y = 0; y < height; y++) {
+            System.arraycopy(tileIds[y], 0, newIds[y], 0, copyCols);
+        }
+        tileIds = newIds;
+        width = newWidth;
+    }
+
+    public void setHeight(int newHeight) {
+        if (newHeight < 1 || newHeight == height) return;
+        int[][] newIds = new int[newHeight][width];
+        int copyRows = Math.min(height, newHeight);
+        for (int y = 0; y < copyRows; y++) {
+            System.arraycopy(tileIds[y], 0, newIds[y], 0, width);
+        }
+        tileIds = newIds;
+        height = newHeight;
+    }
 
     public int getTileWidth() { return tileWidth; }
     public void setTileWidth(int tileWidth) { this.tileWidth = tileWidth; }
