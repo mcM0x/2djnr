@@ -1,146 +1,126 @@
 # AGENTS.md — 2DJNR
 
-Java 21 Maven multi-module project: `engine` (runtime), `editor` (Swing IDE).
+Java 21 Maven single-module project. LWJGL (OpenGL), imgui-java (Dear ImGui), Jackson. Total rewrite.
 
-## Build & run
+## Build
 
 ```bash
-mvn compile          # all modules
-mvn package          # shaded editor JAR
-mvn exec:java        # not configured — run Main.java from IDE
+mvn compile   # compiles src/main/java
+mvn package   # shaded JAR with Main-Class
+mvn exec:java # launch the app
 ```
 
-**No tests exist.** Do not run `mvn test`.
+Run `com.twodjnr.Main` (or `mvn exec:java`). No tests exist.
 
-## Entry points
+## Package map
 
-| Purpose | Class |
+| Package | Contents |
 |---|---|
-| Editor (Swing) | `com.twodjnr.editor.Main` |
-| Play test (GLFW) | `com.twodjnr.editor.PlayTestLauncher.run()` |
+| `math/` | Vec2, Transform2D, AABB (immutable, Jackson-annotated) |
+| `core/` | Component (abstract base), Tree (lifecycle manager), @Property / @NodePath annotations, PropertyUtil |
+| `signal/` | SignalBus (static), @SubscribeSignal annotation, Signals constants |
+| `render/` | Window (GLFW Component), SpriteBatch, Texture, Shader, Camera (ortho) |
+| `editor/` | EditorApp (ImGui root Component) |
+| `editor/undo/` | UndoManager (Component), UndoableAction, PropertyChange, AddRemoveComponent, CompoundAction |
+| `scene/` | Space (2D transform), Sprite, Camera — scene components |
+| `physics/` | PhysicsWorld (Component), Body, ColliderShape, Contact |
+| `parser/` | Parser (Component), ParserComponent, GenericParser (reflection-based) |
+| `project/` | Project, ProjectIO (Jackson save/load) |
+| `log/` | LogBus, LogEntry |
 
-## Editor viewport (LWJGL)
+## Component system (`core/`)
 
-- `LWJGLEditorViewport extends AWTGLCanvas` — **active rendering** in dedicated thread (30 FPS, `Thread.sleep` pacing). Never rely on Swing paint chain.
-- `paintGL()`: clear → load tile set → `renderServer.renderEditor()`
-- Pan: middle-click or Shift+left-drag. Zoom: scroll wheel.
-- Tile paint: left-click on selected `TileMapNode` with `selectedTileId > 0`. Right-click = erase (sets tile to 0).
-- **X11 tearing fix**: call `Toolkit.getDefaultToolkit().sync()` after `swapBuffers()` (per LWJGL docs).
+- `Component`: abstract base for everything. Parent-child tree, lifecycle hooks, path-based node lookup.
+- `Tree`: owns root Component, runs `process()` / `physicsProcess()` traversal, handles `queueFree()`.
+- Path syntax: `"."` = self, `".."` = parent, `"../Sibling"` = parent's child, `"/Root/A/B"` = absolute, `"Child"` = direct child by name.
+- `@NodePath("path")` on a Component-typed field — auto-injected via reflection in `propagateEnterTree()`.
+- Lifecycle auto-wiring: `propagateEnterTree()` calls `SignalBus.register(this)`; `propagateExitTree()` calls `SignalBus.disconnect(this)`.
+- `Component.addChildAt(index, child)` for undo-friendly insertion.
 
-## Module boundaries
+## SignalBus (`signal/`)
 
-- `engine/` — no Swing, no Jackson. LWJGL + STB image loading. Nodes, math, rendering, physics.
-- `editor/` — Swing UI, Jackson databind, binary serialization. Depends on engine.
+- Static bus: `SignalBus.emit(name, emitter, args...)`, `SignalBus.register(obj)`, `SignalBus.disconnect(obj)`.
+- `@SubscribeSignal(signalName="x", emitter="..")` — `emitter` is a path filter relative to the subscriber Component.
+  - Empty `emitter` = no filter (all emissions pass).
+  - Non-Component subscribers ignore emitter filtering entirely — all signals pass through.
+- Thread-safe: `ConcurrentHashMap` + `CopyOnWriteArrayList`.
 
-## Node system
+## @Property annotation (`core/`)
 
-- `Node`: groups, `queueFree()` (deferred removal via `removeChild`), `copy()` (deep copy via `createCopyInstance()`), `prefabReferences` map
-- `Node2D`: single `Transform2D` field (position, rotation, scale), `getBounds()`
-- Lifecycle: `onReady()` → `onProcess(delta)` → `onPhysicsProcess(delta)` → `onInput(event)` → `onEnterTree()`/`onExitTree()`
-- `SceneTree`: tree traversal, process/physics_process loop, group registration
+```java
+@Property(label="Speed", hint="", min=0, max=100)
+```
+Field-level annotation that drives both the editor inspector and the generic JSON parser (via `PropertyUtil`). Supports types: int, float, double, boolean, String, Vec2.
 
-## SignalBus (engine signal bus)
+## Undo/Redo (`editor/undo/`)
 
-- `SignalBus` (static, `engine/.../signal/` package): generic multi-signal bus — any `Object` subscriber
-- `@SubscribeSignal(signalName = "name")` on any public method — auto-wired via `SignalBus.register(instance)`
-- API: `emit("name", args...)`, `register(instance)`, `disconnect(target)`, `disconnect("name", target)`, `disconnect("name", target, "method")`
-- Flexible method matching: autoboxing for primitives, accepts `null` args for reference types
-- Thread-safe: `ConcurrentHashMap` + `CopyOnWriteArrayList` per signal
-- **Node lifecycle auto-registration**: `propagateEnterTree()` calls `SignalBus.register(node)` → any `@SubscribeSignal` methods on a Node subclass are auto-wired when the node enters the tree. `propagateExitTree()` calls `SignalBus.disconnect(node)` to clean up.
-- Engine constants in `EngineSignals`: `ON_BODY_ENTERED`
-- Editor constants in `EditorSignals`: `LOG`, `PREFAB_OPEN`, `TAB_CLOSE`, `NODE_SELECTED`, `NODE_TREE_REFRESH`, `INSPECTOR_REFRESH`, `EXPLORER_REFRESH`, `REPAINT_REQUEST`
+- `UndoManager extends Component` — 500-action stack, configurable. Emits `UNDO_STACK_CHANGED`.
+- `PropertyChange` — records old/new value, redo/undo via reflection field set.
+- `AddRemoveComponent` — records parent + child + index for tree mutations.
+- `CompoundAction` — groups multiple actions for atomic undo/redo.
 
-### Editor decoupling via signals
+## Parser system (`parser/`)
 
-All inter-panel communication uses `SignalBus` — no panel holds an `EditorFrame` reference:
+- `Parser extends Component` — root parser, delegates by `"type"` to registered `ParserComponent`s.
+- `GenericParser` uses `PropertyUtil` to populate `@Property` fields from JSON automatically.
+- Registration: `parser.register("Sprite", new GenericParser("Sprite", Sprite::new))`.
 
-| Emitter | Signal | Subscriber |
+## Render pipeline (`render/`)
+
+- `Window extends Component` — creates GLFW window, owns the render loop. `onProcess(delta)` polls events.
+- `SpriteBatch` — batched quad rendering with texture support (max 1000 quads).
+- `Texture` — STB image loading, GL texture (NEAREST).
+- `Shader` — GLSL program compilation. Default vertex/fragment shaders included.
+- `Camera` — orthographic projection utility.
+
+## Physics (`physics/`)
+
+- `PhysicsWorld extends Component` — finds `Body` children in tree, steps simulation, emits `ON_BODY_ENTERED`/`ON_BODY_EXITED`.
+
+## Editor (`editor/`)
+
+- `EditorApp extends Component` — root of editor subtree. Initializes ImGui with docking support.
+- `ViewportPanel extends Component` — FBO-rendered scene view. Has its own `Camera` + `SpriteBatch`.
+  Draws all `Sprite` children of the scene root in `onProcess()`.
+- `SceneTreePanel extends Component` — hierarchy tree from `sceneRoot`. Right-click: Add Child (via
+  `ComponentFactory`), Duplicate, Delete. Selection emits `NODE_SELECTED`.
+- `InspectorPanel extends Component` — subscribes `NODE_SELECTED`, rebuilds child `FieldWidget`s
+  dynamically via `queueFree()` + `addChild()`. Each widget pushes `PropertyChange` to `UndoManager`.
+- `ComponentFactory extends Component` — registry of `Supplier<Component>`. Lives as editor child,
+  discovered via `@NodePath` by SceneTreePanel.
+- `editor/field/` — `FieldWidget` abstract base + `IntWidget`, `FloatWidget`, `BooleanWidget`,
+  `StringWidget`, `Vec2Widget`. Each reads/writes target via `PropertyUtil` + reflection.
+
+## Scene components (`scene/`)
+
+- `Space extends Component` — 2D transform node with `Transform2D`, `getGlobalPosition()`, child transforms.
+- `Sprite extends Space` — texture path, modulate color (Vec4), flip H/V.
+- `Camera extends Space` — zoom, active flag.
+
+## Lifecycle hooks
+
+| Hook | When | Used by |
 |---|---|---|
-| `NodeTreePanel`, `AssetExplorerPanel` | `prefabOpen(id)` | `EditorFrame.onPrefabOpen()` |
-| `ClosableTabComponent` | `tabClose(id)` | `EditorFrame.onTabClose()` |
-| `NodeTreePanel` | `repaintRequest` | `EditorFrame.onRepaintRequest()` |
-| `EditorFrame`, `EditorSession` | `nodeSelected(node)` | `NodeTreePanel.onNodeSelected()`, `NodeInspector.onNodeSelected()` |
-| `EditorFrame` | `nodeTreeRefresh` | `NodeTreePanel.onNodeTreeRefresh()` |
-| `EditorFrame` | `inspectorRefresh` | `NodeInspector.onInspectorRefresh()` |
-| `EditorFrame` | `explorerRefresh` | `AssetExplorerPanel.onExplorerRefresh()` |
-
-Constructors no longer take `EditorFrame`: `NodeTreePanel(session)`, `AssetExplorerPanel(session)`, `ClosableTabComponent(title, id)`.
-
-## Prefab / IsolatedNode system
-
-- Every node tree is an `IsolatedNode` (binary `.isolated` file under `<projectDir>/isolated/`)
-- Prefab creation: right-click node → "Isolate Node" → creates `IsolatedNode` + replaces with `InstanceNode`
-- `InstanceNode`: holds prefab ID, `reloadFromPrefab(registry)` — replaces children with fresh snapshot
-- `IsolatedNodeRegistry`: registers all isolated nodes, `get(id)`, `getAll()`
-
-## Serialization
-
-| Format | File | Used for |
-|---|---|---|
-| Jackson JSON | `ProjectSerializer` | `project.json` |
-| Jackson JSON | `TileSetSerializer` | `.tileset` files |
-| Custom binary (v2) | `IsolatedNodeBinaryWriter/Reader` | `.isolated` prefab files |
-
-**Binary format** (`BinaryFormatConstants`):
-- Magic header (4 bytes), version int, id/name/lastModified, string table, node tree
-- Supports `@Export` fields: int, float, boolean, String, Vec2, TileMap
-- Prefab references (version 2+): `prefabReferences` map serialized per node
-- `setWidth()`/`setHeight()` on TileMap resize the `tileIds` array preserving existing data
-
-## @Export / Inspector system
-
-- `NodeInspector` uses `Map<Class<?>, FieldEditor>` registry
-- Built-in editors: `int`, `float`, `boolean`, `String`, `Vec2`, `Node2D`, `TileMap`
-- String hints: `@Export(hint="texture")` → file browser (images), `@Export(hint="tileset")` → file browser (.tileset), `@Export(hint="prefab")` → prefab picker
-- `Node2D`-typed `@Export` → prefab picker (stores ID in `prefabReferences` map)
-- `TileMap` editor: 4 spinners (Grid W/H, Tile W/H). Changing W/H resizes tile array without data loss.
-- Tile palette: thumbnails in Inspector when `TileMapNode` is selected. Click to set `selectedTileId`.
-
-## LogBus (signal-based logging)
-
-- `LogBus.log(component, action, detail)` — writes stdout + `<projectDir>/.editor-log.txt`, emits to SignalBus subscribers
-- `LogBus.log(component, action, detail, runnable)` — logs then runs the runnable
-- `LogBus.connect(target, "methodName")` / `disconnect(target)` — delegates to `SignalBus.connect("log", ...)` (use `@SubscribeSignal(signalName="log")` instead)
-- Subscriber method signature: `void onLogEntry(LogEntry entry)`
-- **File rotation**: `init(projectDir)` renames `.editor-log.txt` → `.editor-log-old.txt`, creates fresh file
-- `LogWindow` (Swing JFrame): JTable with search, component filter, Copy (TSV to clipboard), Clear, auto-scroll. Connects via `@SubscribeSignal(signalName="log")`.
+| `onProcess(delta)` | Before children, every frame | Editor panels draw ImGui windows |
+| `onPostProcess(delta)` | After all children processed | EditorApp calls `ImGui.render()` |
 
 ## Key files
 
 | File | Purpose |
 |---|---|
-| `pom.xml` | Parent POM with engine + editor modules |
-| `engine/.../level/TileSet.java` | Spritesheet path, tile regions, auto-detect, nextId |
-| `engine/.../level/TileMap.java` | `int[][] tileIds`, width/height/tileW/tileH, `setTile()` |
-| `engine/.../nodes/TileMapNode.java` | `tileSet` (transient), `tileSetPath` (@Export), `worldToGrid()`, `CellCoord` |
-| `engine/.../render/RenderServer.java` | `renderEditor()` draws axes + selection outline, `renderTileMap()` uses spritesheet UVs |
-| `engine/.../render/AssetManager.java` | Texture cache, `setProjectRoot()`, `getTexture(relativePath)` |
-| `engine/.../render/SpriteBatch.java` | Creates 1×1 white texture, binds in `begin()` so non-textured quads render |
-| `engine/.../render/Texture.java` | Loads via STB, GL texture with NEAREST filtering |
-| `editor/.../project/` | `ProjectSerializer`, `TileSetSerializer`, `IsolatedNodeBinaryWriter/Reader` |
-| `editor/.../editor/EditorSession.java` | Holds project, registry, selected node, viewport camera, selectedTileId, activeTileSet |
-| `editor/.../ui/EditorFrame.java` | JTabbedPane for multiple IsolatedNodes, menu bar, project settings dialog |
-| `editor/.../ui/NodeTreePanel.java` | JTree with add/delete/isolate/reload context menu |
-| `editor/.../ui/NodeInspector.java` | Property editor with @Export field editors + tile palette |
-| `editor/.../ui/AssetExplorerPanel.java` | File tree browser + import (path traversal validation) + status bar |
-| `editor/.../ui/TileSetEditorDialog.java` | Spritesheet viewer with auto-detect + free-form drag-select region editor |
-| `editor/.../ui/ClosableTabComponent.java` | Tab header with close button (×) |
-| `editor/.../canvas/LWJGLEditorViewport.java` | AWTGLCanvas with pan/zoom/pick/paint |
-| `editor/.../log/LogBus.java` | Static signal-distribution logger |
-| `editor/.../log/LogWindow.java` | JTable log viewer with search/filter/copy |
-| `engine/.../signal/SignalBus.java` | Static multi-signal bus with `@SubscribeSignal` auto-wiring |
-| `engine/.../signal/EngineSignals.java` | Engine signal constants (`ON_BODY_ENTERED`) |
-| `editor/.../signal/EditorSignals.java` | Editor signal constants for SignalBus |
-
-## Gotchas
-
-- **`doNewProject()` does NOT clear project directory** — must call `session.setProjectDirectory(null)` to prevent stale file links. Fixed in AGENTS.md generation.
-- **Asset import name** — rejects `/`, `\`, `..` to prevent path traversal overwrite.
-- **No `setProjectDirectory` in default project** — asset browser shows empty tree with warning until first save.
-- **`LogBus` reflection** — subscriber methods must be `public` and accept exactly `LogEntry`. Missing methods log a warning but don't crash.
-- **`SignalBus` + `@SubscribeSignal`** — subscriber methods must be `public`. `register(instance)` must be called after construction for annotation auto-wiring to work.
-- **Node lifecycle auto-registration** — `SignalBus.register(node)` is called in `propagateEnterTree()`; `SignalBus.disconnect(node)` in `propagateExitTree()`. Nodes auto-wire `@SubscribeSignal` when entering the tree and clean up when leaving.
-- **`File.renameTo()` for log rotation** — platform-dependent. Works on Linux; on Windows may fail if file is locked.
-- **Binary format version** — `BinaryFormatConstants.VERSION` must be bumped if the node serialization layout changes. The reader checks `version >= 2` for prefab references.
-- **PlayTest** creates a deep copy of the scene tree (`root.copy()`) — any runtime mutations don't affect the editor tree.
-- **`Texture` constructor** throws if `stbi_load` fails — caller must handle.
+| `pom.xml` | Single-module Maven, LWJGL 3.3.3, imgui-java 1.86.11, Jackson 2.17 |
+| `appComponentStructure.md` | Full runtime tree topology and wiring |
+| `src/.../Main.java` | Entry point |
+| `src/.../core/Component.java` | Abstract base class |
+| `src/.../core/Tree.java` | Tree traversal + lifecycle |
+| `src/.../core/PropertyUtil.java` | Reflection-based `@Property` field scanner |
+| `src/.../signal/SignalBus.java` | Static signal bus with emitter filtering |
+| `src/.../signal/SubscribeSignal.java` | Annotation: signalName + emitter path |
+| `src/.../signal/Signals.java` | Signal name constants |
+| `src/.../editor/EditorApp.java` | ImGui root, dock space, initializes backends |
+| `src/.../editor/SceneTreePanel.java` | Hierarchy panel with context menus |
+| `src/.../editor/InspectorPanel.java` | `@Property` editor with dynamic widgets |
+| `src/.../editor/ViewportPanel.java` | FBO-rendered scene viewport |
+| `src/.../editor/ComponentFactory.java` | Registry of creatable component types |
+| `src/.../editor/field/FieldWidget.java` | Base class + factory method |
+| `src/.../editor/undo/UndoManager.java` | Undo/redo stack (Component, max 500) |
